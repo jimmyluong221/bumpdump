@@ -128,6 +128,20 @@
     <div class="row"><label>Funding (bps/8h)</label><input type="number" id="fundingBps8h" value="1" step="0.5"></div>
   </fieldset>
   <fieldset>
+    <legend>Backend — Google Sheet</legend>
+    <div class="row"><label>Web app URL<small>from paper_desk_backend.gs deployment (…/exec)</small></label></div>
+    <input type="text" id="gsUrl" style="width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--ink);font-family:var(--mono);font-size:11.5px;padding:7px 8px" placeholder="https://script.google.com/macros/s/…/exec">
+    <div class="row" style="margin-top:8px"><label>Token</label>
+      <input type="text" id="gsToken" style="width:150px;text-align:left" placeholder="same as TOKEN in .gs"></div>
+    <div class="check"><input type="checkbox" id="gsAuto" checked><span>Auto-sync to Sheet after every trade / refresh</span></div>
+    <div class="btns" style="margin:6px 0 0">
+      <button id="btnGsSave" class="small">Save to Sheet now</button>
+      <button id="btnGsLoad" class="small">Load from Sheet</button>
+      <button id="btnGsPing" class="small">Test connection</button>
+    </div>
+    <p class="note">The Sheet becomes the source of truth: full state in the State tab, plus readable Trades and Open tabs. Local storage still works as an offline cache.</p>
+  </fieldset>
+  <fieldset>
     <legend>Account</legend>
     <div class="row"><label>Reset equity to $</label><input type="number" id="resetEquity" value="100"></div>
     <div class="btns" style="margin:6px 0 0">
@@ -198,11 +212,59 @@ function cfg(){return{
 /* ============ persistence: localStorage if available, else memory ============ */
 const store={
   ok:(()=>{try{localStorage.setItem('_t','1');localStorage.removeItem('_t');return true;}catch(e){return false;}})(),
-  save(){try{if(this.ok)localStorage.setItem('paperDeskV1',JSON.stringify(STATE));}catch(e){}},
+  save(){try{if(this.ok)localStorage.setItem('paperDeskV1',JSON.stringify(STATE));}catch(e){}
+    if(typeof gs!=='undefined')gs.queue();},
   load(){try{if(this.ok){const s=localStorage.getItem('paperDeskV1');if(s)return JSON.parse(s);}}catch(e){}return null;}
 };
 function freshState(eq){return{equity:eq,startEquity:eq,createdAt:Date.now(),open:[],closed:[]};}
 STATE=store.load()||freshState(100);
+
+/* ============ Google Sheet backend (Apps Script web app) ============ */
+const gs={
+  cfg(){return{url:$('gsUrl').value.trim(),token:$('gsToken').value.trim(),auto:$('gsAuto').checked};},
+  timer:null,busy:false,
+  // POST as text/plain: a CORS "simple request" — Apps Script web apps don't
+  // answer preflights, so application/json would be blocked, text/plain works.
+  async save(manual){
+    const c=this.cfg();if(!c.url){if(manual)log('Set the web app URL first.','err');return;}
+    if(this.busy)return; this.busy=true;
+    try{
+      const r=await fetch(c.url,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify({token:c.token,state:STATE})});
+      const j=await r.json();
+      if(!j.ok)throw new Error(j.error||'save rejected');
+      log('Synced to Sheet · '+new Date(j.savedAt).toLocaleTimeString(),'ok');
+    }catch(e){log('Sheet sync failed: '+e.message+' — check URL/token, and that the deployment allows "Anyone".','err');}
+    this.busy=false;
+  },
+  queue(){ // debounce: many rapid changes → one write
+    const c=this.cfg();if(!c.url||!c.auto)return;
+    clearTimeout(this.timer);this.timer=setTimeout(()=>this.save(false),2500);
+  },
+  async load(){
+    const c=this.cfg();if(!c.url){log('Set the web app URL first.','err');return;}
+    try{
+      const r=await fetch(c.url+'?action=load&token='+encodeURIComponent(c.token));
+      const j=await r.json();
+      if(!j.ok)throw new Error(j.error||'load rejected');
+      if(!j.state){log('Sheet has no saved state yet — Save to Sheet first.','err');return;}
+      if(typeof j.state.equity!=='number'||!Array.isArray(j.state.open)||!Array.isArray(j.state.closed))
+        throw new Error('stored state is malformed');
+      STATE=j.state;store.save();renderAll();
+      log('Loaded state from Sheet ('+STATE.closed.length+' closed trades, equity '+fmt$(STATE.equity)+').','ok');
+    }catch(e){log('Sheet load failed: '+e.message,'err');}
+  },
+  async ping(){
+    const c=this.cfg();if(!c.url){log('Set the web app URL first.','err');return;}
+    try{
+      const r=await fetch(c.url+'?action=ping&token='+encodeURIComponent(c.token));
+      const j=await r.json();
+      log(j.ok?'Backend reachable, token accepted.':'Backend replied: '+(j.error||'?'),j.ok?'ok':'err');
+    }catch(e){log('Ping failed: '+e.message+' — if opened inside the Claude preview, external calls are blocked; open the file locally.','err');}
+  },
+  remember(){try{if(store.ok)localStorage.setItem('paperDeskGs',JSON.stringify({url:$('gsUrl').value,token:$('gsToken').value,auto:$('gsAuto').checked}));}catch(e){}},
+  recall(){try{if(store.ok){const s=localStorage.getItem('paperDeskGs');if(s){const j=JSON.parse(s);$('gsUrl').value=j.url||'';$('gsToken').value=j.token||'';$('gsAuto').checked=j.auto!==false;}}}catch(e){}}
+};
 
 /* ============ Coinalyze ============ */
 async function getMarkets(key){
@@ -462,7 +524,12 @@ $('autoSec').addEventListener('change',()=>{
   if(s>=15){timer=setInterval(refresh,s*1000);log('Auto-refresh every '+s+'s.','ok');}
   else if(s>0){log('Minimum auto-refresh is 15s (rate limits).','err');$('autoSec').value=0;}
   else log('Auto-refresh off.');});
+$('btnGsSave').addEventListener('click',()=>gs.save(true));
+$('btnGsLoad').addEventListener('click',()=>gs.load());
+$('btnGsPing').addEventListener('click',()=>gs.ping());
+['gsUrl','gsToken','gsAuto'].forEach(id=>$(id).addEventListener('change',()=>gs.remember()));
 window.openPaper=openPaper;window.manualClose=manualClose;
+gs.recall();
 renderAll();
 </script>
 </body>
