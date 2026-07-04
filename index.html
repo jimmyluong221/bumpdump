@@ -91,8 +91,8 @@
 <div>
   <fieldset>
     <legend>Data</legend>
-    <div class="row"><label>Coinalyze API key</label>
-      <input type="text" id="apiKey" style="width:150px;text-align:left" placeholder="paste key"></div>
+    <div class="row"><label>Coinalyze API key<small>optional if COINALYZE_KEY is set in the backend — remembered by this browser either way</small></label>
+      <input type="text" id="apiKey" style="width:150px;text-align:left" placeholder="paste key (or blank)"></div>
     <div class="row"><label>Preferred exchange</label><input type="text" id="exchange" value="Binance" style="text-align:left"></div>
     <div class="row"><label>Interval</label>
       <select id="interval">
@@ -139,7 +139,7 @@
       <button id="btnGsLoad" class="small">Load from Sheet</button>
       <button id="btnGsPing" class="small">Test connection</button>
     </div>
-    <p class="note">The Sheet becomes the source of truth: full state in the State tab, plus readable Trades and Open tabs. Local storage still works as an offline cache.</p>
+    <p class="note">The Sheet is the source of truth, and the backend now also <b>proxies Coinalyze</b>: when a URL is set here, all market-data calls go through it (no browser CORS, works from any origin), and the API key can live in the .gs file instead of this page.</p>
   </fieldset>
   <fieldset>
     <legend>Account</legend>
@@ -209,6 +209,9 @@ function cfg(){return{
   positionFraction:+$('positionFraction').value,maxConcurrent:+$('maxConcurrent').value,
   slippageBps:+$('slippageBps').value,takerFeeBps:+$('takerFeeBps').value,fundingBps8h:+$('fundingBps8h').value};}
 
+/* can we fetch market data at all? (backend proxy OR direct key) */
+function dataReady(){const g=gs.cfg();return !!g.url||!!$('apiKey').value.trim();}
+
 /* ============ persistence: localStorage if available, else memory ============ */
 const store={
   ok:(()=>{try{localStorage.setItem('_t','1');localStorage.removeItem('_t');return true;}catch(e){return false;}})(),
@@ -259,19 +262,38 @@ const gs={
     try{
       const r=await fetch(c.url+'?action=ping&token='+encodeURIComponent(c.token));
       const j=await r.json();
-      log(j.ok?'Backend reachable, token accepted.':'Backend replied: '+(j.error||'?'),j.ok?'ok':'err');
+      if(j.ok)log('Backend reachable, token accepted. Coinalyze key in backend: '+(j.hasKey?'yes — desk key field can stay blank':'no — set COINALYZE_KEY in the .gs or fill the desk key field'),'ok');
+      else log('Backend replied: '+(j.error||'?')+(j.error==='bad token'?' — token here must EXACTLY match TOKEN in the .gs; after editing the .gs, redeploy a NEW VERSION (Deploy › Manage deployments › edit › New version), a plain save is not enough':''),'err');
     }catch(e){log('Ping failed: '+e.message+' — if opened inside the Claude preview, external calls are blocked; open the file locally.','err');}
   },
-  remember(){try{if(store.ok)localStorage.setItem('paperDeskGs',JSON.stringify({url:$('gsUrl').value,token:$('gsToken').value,auto:$('gsAuto').checked}));}catch(e){}},
-  recall(){try{if(store.ok){const s=localStorage.getItem('paperDeskGs');if(s){const j=JSON.parse(s);$('gsUrl').value=j.url||'';$('gsToken').value=j.token||'';$('gsAuto').checked=j.auto!==false;}}}catch(e){}}
+  /* Coinalyze proxied through the backend — server-side fetch, no browser CORS */
+  async proxy(action,params){
+    const c=this.cfg();
+    let u=c.url+'?action='+action+'&token='+encodeURIComponent(c.token);
+    for(const k in params)if(params[k]!==undefined&&params[k]!=='')u+='&'+k+'='+encodeURIComponent(params[k]);
+    const key=$('apiKey').value.trim();if(key)u+='&key='+encodeURIComponent(key);
+    const r=await fetch(u);const j=await r.json();
+    if(!j.ok)throw new Error(action+' via backend: '+(j.error||'?'));
+    return j.data;
+  },
+  remember(){try{if(store.ok)localStorage.setItem('paperDeskGs',JSON.stringify({url:$('gsUrl').value,token:$('gsToken').value,auto:$('gsAuto').checked,apiKey:$('apiKey').value}));}catch(e){}},
+  recall(){try{if(store.ok){const s=localStorage.getItem('paperDeskGs');if(s){const j=JSON.parse(s);$('gsUrl').value=j.url||'';$('gsToken').value=j.token||'';$('gsAuto').checked=j.auto!==false;$('apiKey').value=j.apiKey||'';}}}catch(e){}}
 };
 
-/* ============ Coinalyze ============ */
-async function getMarkets(key){
+/* ============ Coinalyze (direct or via backend proxy) ============ */
+async function getMarkets(c){
   if(MARKETS)return MARKETS;
-  const r=await fetch(API+'/future-markets?api_key='+encodeURIComponent(key));
+  if(gs.cfg().url){MARKETS=await gs.proxy('markets',{});return MARKETS;}
+  const r=await fetch(API+'/future-markets?api_key='+encodeURIComponent(c.apiKey));
   if(!r.ok)throw new Error('future-markets HTTP '+r.status);
   MARKETS=await r.json();return MARKETS;
+}
+async function fetchOhlcv(c,symbolsCsv,from,to){
+  if(gs.cfg().url)return gs.proxy('ohlcv',{symbols:symbolsCsv,interval:c.interval,from,to});
+  const u=API+'/ohlcv-history?symbols='+encodeURIComponent(symbolsCsv)+'&interval='+c.interval+'&from='+from+'&to='+to+'&api_key='+encodeURIComponent(c.apiKey);
+  const r=await fetch(u);const j=await r.json();
+  if(!r.ok)throw new Error(j.message||('ohlcv HTTP '+r.status));
+  return j;
 }
 function resolveAll(c,markets){
   MAP={};const miss=[];
@@ -294,9 +316,7 @@ async function fetchBars(c){
   // batched: Coinalyze accepts comma-separated symbols in one call
   for(let i=0;i<list.length;i+=20){
     const chunk=list.slice(i,i+20);
-    const u=API+'/ohlcv-history?symbols='+encodeURIComponent(chunk.join(','))+'&interval='+c.interval+'&from='+from+'&to='+to+'&api_key='+encodeURIComponent(c.apiKey);
-    const r=await fetch(u);const j=await r.json();
-    if(!r.ok)throw new Error(j.message||('ohlcv HTTP '+r.status));
+    const j=await fetchOhlcv(c,chunk.join(','),from,to);
     (Array.isArray(j)?j:[]).forEach(entry=>{
       const conf=Object.keys(MAP).find(k=>MAP[k].symbol===entry.symbol);if(!conf)return;
       const denom=MAP[conf].denom;
@@ -392,9 +412,9 @@ function closePaper(p,exitRaw,reason){
 }
 /* refresh prices, run stop/time exits against bars since entry */
 async function refresh(){
-  const c=cfg();if(!c.apiKey){log('API key required.','err');return;}
+  const c=cfg();if(!dataReady()){log('Set the backend web app URL (recommended) or a Coinalyze API key.','err');return;}
   try{
-    resolveAll(c,await getMarkets(c.apiKey));await fetchBars(c);
+    resolveAll(c,await getMarkets(c));await fetchBars(c);
     for(const p of [...STATE.open]){
       const bars=BARS[p.sym];if(!bars||!bars.length)continue;
       const since=bars.filter(b=>b.t>p.entryBarT);
@@ -411,14 +431,14 @@ async function refresh(){
     scanFromBars(c);
     store.save();renderAll();
     log('Refreshed '+Object.keys(BARS).length+' symbols · '+new Date().toLocaleTimeString(),'ok');
-  }catch(e){log('Refresh failed: '+e.message+' (CORS/network? open this file locally)','err');}
+  }catch(e){log('Refresh failed: '+e.message,'err');}
 }
 async function scan(){
-  const c=cfg();if(!c.apiKey){log('API key required.','err');return;}
+  const c=cfg();if(!dataReady()){log('Set the backend web app URL (recommended) or a Coinalyze API key.','err');return;}
   $('btnScan').disabled=true;
-  try{resolveAll(c,await getMarkets(c.apiKey));await fetchBars(c);scanFromBars(c);renderAll();
+  try{resolveAll(c,await getMarkets(c));await fetchBars(c);scanFromBars(c);renderAll();
     log('Scan complete: '+SIGNALS.length+' symbols rated.','ok');
-  }catch(e){log('Scan failed: '+e.message+' (CORS/network? open this file locally)','err');}
+  }catch(e){log('Scan failed: '+e.message,'err');}
   $('btnScan').disabled=false;
 }
 function scanFromBars(c){
@@ -527,7 +547,7 @@ $('autoSec').addEventListener('change',()=>{
 $('btnGsSave').addEventListener('click',()=>gs.save(true));
 $('btnGsLoad').addEventListener('click',()=>gs.load());
 $('btnGsPing').addEventListener('click',()=>gs.ping());
-['gsUrl','gsToken','gsAuto'].forEach(id=>$(id).addEventListener('change',()=>gs.remember()));
+['gsUrl','gsToken','gsAuto','apiKey'].forEach(id=>$(id).addEventListener('change',()=>gs.remember()));
 window.openPaper=openPaper;window.manualClose=manualClose;
 gs.recall();
 renderAll();
