@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vol_z desk — pump/dump backtest panel</title>
+<style>
+  :root{
+    --bg:#0d1015; --panel:#151a21; --panel-2:#1b212b; --line:#262e3a;
+    --ink:#e9e4d6; --muted:#8a93a3; --amber:#f2a33c; --amber-dim:#7a5a2a;
+    --long:#46c08a; --short:#e5484d; --blue:#5aa9e6;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'Inter',system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px}
+  a{color:var(--amber)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px 20px 80px}
+
+  /* header = tape strip */
+  header{border-bottom:1px solid var(--line);padding:14px 0 12px;display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  header h1{font-family:var(--mono);font-size:18px;font-weight:600;letter-spacing:.04em;margin:0}
+  header h1 .z{color:var(--amber)}
+  header .sub{color:var(--muted);font-size:12px}
+  #tape{font-family:var(--mono);font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap;overflow:hidden;max-width:46%}
+  #tape b{color:var(--ink);font-weight:600}
+
+  .grid{display:grid;grid-template-columns:340px 1fr;gap:18px;margin-top:18px}
+  @media(max-width:960px){.grid{grid-template-columns:1fr}}
+
+  fieldset{border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:0 0 14px;padding:12px 14px 14px}
+  legend{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber);padding:0 6px}
+  .row{display:flex;gap:10px;align-items:center;margin:7px 0}
+  .row label{flex:1;color:var(--muted);font-size:12.5px;line-height:1.25}
+  .row label small{display:block;color:#5c6474;font-size:10.5px}
+  .row input[type=number],.row input[type=text],.row select{
+    width:118px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
+    color:var(--ink);font-family:var(--mono);font-size:12.5px;padding:6px 8px;text-align:right}
+  .row select{text-align:left}
+  .row input:focus,.row select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+  textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;color:var(--ink);
+    font-family:var(--mono);font-size:11.5px;padding:8px;resize:vertical}
+  .check{display:flex;gap:8px;align-items:center;margin:8px 0;color:var(--muted);font-size:12.5px}
+  .check input{accent-color:var(--amber)}
+
+  .btns{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
+  button{font-family:var(--mono);font-size:12.5px;border-radius:6px;border:1px solid var(--line);
+    background:var(--panel-2);color:var(--ink);padding:9px 14px;cursor:pointer}
+  button:hover{border-color:var(--amber-dim)}
+  button.primary{background:var(--amber);border-color:var(--amber);color:#171206;font-weight:600}
+  button.primary:hover{filter:brightness(1.08)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+  .card .k{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-family:var(--mono)}
+  .card .v{font-family:var(--mono);font-size:19px;margin-top:4px;font-weight:600}
+  .card .v.pos{color:var(--long)} .card .v.neg{color:var(--short)}
+  .card .n{font-size:11px;color:var(--muted);margin-top:2px}
+
+  /* signature element: honesty strip — fee floor vs gross edge */
+  #honesty{background:linear-gradient(90deg,var(--panel),var(--panel-2));border:1px solid var(--line);
+    border-left:3px solid var(--amber);border-radius:8px;padding:12px 14px;margin-bottom:14px}
+  #honesty h3{margin:0 0 8px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--amber)}
+  .gauge{position:relative;height:14px;background:var(--panel-2);border-radius:7px;overflow:hidden;margin:6px 0 4px}
+  .gauge .fee{position:absolute;left:0;top:0;bottom:0;background:repeating-linear-gradient(45deg,#5a3b3b 0 6px,#4a3030 6px 12px)}
+  .gauge .edge{position:absolute;left:0;top:0;bottom:0;background:var(--long);opacity:.85;mix-blend-mode:screen}
+  #honesty .cap{font-size:12px;color:var(--muted)}
+  #honesty .cap b{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+  th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th{color:var(--muted);font-weight:500;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;position:sticky;top:0;background:var(--panel)}
+  td:first-child,th:first-child{text-align:left}
+  .pos{color:var(--long)} .neg{color:var(--short)}
+  .tblwrap{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+
+  #log{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--panel);
+    border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:150px;overflow:auto;white-space:pre-wrap}
+  #log .err{color:var(--short)} #log .ok{color:var(--long)}
+
+  canvas{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  h2{font-family:var(--mono);font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:22px 0 10px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px}
+  .tabs button.active{border-color:var(--amber);color:var(--amber)}
+  .hidden{display:none}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>vol_<span class="z">z</span> desk</h1>
+  <span class="sub">pump/dump perp backtester · Coinalyze data · day-trade intervals down to 1m</span>
+  <div id="tape">no run yet — configure &amp; press Run backtest</div>
+</header>
+
+<div class="grid">
+<!-- ============ LEFT: CONFIG ============ -->
+<div>
+  <fieldset>
+    <legend>Data</legend>
+    <div class="row"><label>Coinalyze API key<small>coinalyze.net/account/api-key — needed for live fetch only</small></label>
+      <input type="text" id="apiKey" style="width:150px;text-align:left" placeholder="paste key"></div>
+    <div class="row"><label>Preferred exchange</label>
+      <input type="text" id="exchange" value="Binance" style="text-align:left"></div>
+    <div class="row"><label>Interval<small>1m–15m = day-trade mode</small></label>
+      <select id="interval">
+        <option value="1min">1 min</option><option value="5min" selected>5 min</option>
+        <option value="15min">15 min</option><option value="30min">30 min</option>
+        <option value="1hour">1 h</option><option value="2hour">2 h</option>
+        <option value="4hour">4 h</option><option value="6hour">6 h</option>
+        <option value="12hour">12 h</option><option value="daily">1 d</option>
+      </select></div>
+    <div class="row"><label>History (days)<small>Coinalyze free tier trims deep minute history</small></label>
+      <input type="number" id="historyDays" value="14" min="1"></div>
+    <label style="color:var(--muted);font-size:12.5px">Symbols (comma-separated, USDT-quoted)</label>
+    <textarea id="symbols" rows="3">BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,LTCUSDT,ADAUSDT,BNBUSDT,PEPEUSDT,WIFUSDT,SUIUSDT,APTUSDT,NEARUSDT,INJUSDT,SEIUSDT,TIAUSDT,RUNEUSDT,WLDUSDT</textarea>
+    <div class="check"><input type="checkbox" id="pasteMode"><span>Paste mode — use TSV below instead of live fetch (RawData sheet columns: Symbol, OpenTime, Open, High, Low, Close, Volume, VolumeUSD)</span></div>
+    <textarea id="pasteBox" rows="4" class="hidden" placeholder="BTCUSDT	2026-01-12 07:00	90989.9	91200.1	90800.2	91150.6	1234.5	112300000&#10;…"></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>Signal</legend>
+    <div class="row"><label>vol_z gate</label><input type="number" id="volZGate" value="2.0" step="0.1"></div>
+    <div class="row"><label>Vol baseline (days)</label><input type="number" id="volLookbackDays" value="2" step="0.5"></div>
+    <div class="row"><label>Sustained bars</label><input type="number" id="sustainedBars" value="2" min="1"></div>
+    <div class="row"><label>Momentum lookback (bars)</label><input type="number" id="momLookback" value="3" min="1"></div>
+    <div class="row"><label>Run-up lookback (bars)</label><input type="number" id="runupLookback" value="20" min="2"></div>
+    <div class="row"><label>Run-up threshold %<small>short-side pump flag</small></label><input type="number" id="runupThreshold" value="15" step="0.5"></div>
+    <div class="row"><label>Climax lookback (bars)</label><input type="number" id="climaxLookback" value="10" min="2"></div>
+    <div class="row"><label>Bounce window (bars)</label><input type="number" id="bounceLookback" value="5" min="1"></div>
+    <div class="check"><input type="checkbox" id="reverseSignals"><span>Reverse signals (longs→shorts, shorts→longs)</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Trade &amp; risk</legend>
+    <div class="row"><label>Max holding (bars)</label><input type="number" id="holdingBars" value="10" min="1"></div>
+    <div class="row"><label>Stop-loss %</label><input type="number" id="stopLossPct" value="10" step="0.5"></div>
+    <div class="row"><label>Leverage ×</label><input type="number" id="leverage" value="2" step="0.5" min="1"></div>
+    <div class="row"><label>Start capital $</label><input type="number" id="startCapital" value="100"></div>
+    <div class="row"><label>Monthly contribution $</label><input type="number" id="monthlyContribution" value="100"></div>
+    <div class="row"><label>Position fraction of equity</label><input type="number" id="positionFraction" value="0.5" step="0.05" min="0.01" max="1"></div>
+    <div class="row"><label>Max concurrent positions</label><input type="number" id="maxConcurrent" value="2" min="1"></div>
+    <div class="row"><label>Min bar volume USD<small>liquidity floor on the signal bar</small></label><input type="number" id="minVolumeUSD" value="100000"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Costs (minnow fill model)</legend>
+    <div class="row"><label>Slippage (bps/side)</label><input type="number" id="slippageBps" value="3" step="0.5"></div>
+    <div class="row"><label>Taker fee (bps/side)</label><input type="number" id="takerFeeBps" value="5" step="0.5"></div>
+    <div class="row"><label>Funding (bps per 8h)</label><input type="number" id="fundingBps8h" value="1" step="0.5"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Sweeps</legend>
+    <div class="row"><label>Gate sweep list</label><input type="text" id="gateSweepList" value="1.0,1.5,2.0,2.5,3.0"></div>
+    <div class="row"><label>Leverage sweep list</label><input type="text" id="leverageSweepList" value="1,2,3,5"></div>
+  </fieldset>
+</div>
+
+<!-- ============ RIGHT: ACTIONS + RESULTS ============ -->
+<div>
+  <div class="btns">
+    <button id="btnUniverse">Check universe</button>
+    <button id="btnFetch">Fetch data</button>
+    <button id="btnRun" class="primary">Run backtest</button>
+    <button id="btnGate">Gate sweep</button>
+    <button id="btnLev">Leverage sweep</button>
+    <button id="btnCsv" disabled>Export trades CSV</button>
+  </div>
+
+  <div id="log">Ready. Live fetch requires opening this file in your own browser (Coinalyze blocks calls from inside the Claude preview). If the fetch fails with a CORS error, switch to Paste mode and paste the RawData sheet export.</div>
+
+  <div id="honesty" class="hidden">
+    <h3>Fee floor vs gross edge — the day-trade reality check</h3>
+    <div class="gauge"><div class="fee" id="gFee"></div><div class="edge" id="gEdge"></div></div>
+    <div class="cap" id="honestyCap"></div>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <h2 id="eqTitle" class="hidden">Equity curve</h2>
+  <canvas id="eqCanvas" height="180" class="hidden"></canvas>
+
+  <div id="resultTabs" class="hidden">
+    <h2>Results</h2>
+    <div class="tabs">
+      <button data-tab="trades" class="active">Trades</button>
+      <button data-tab="monthly">Daily / monthly P&amp;L</button>
+      <button data-tab="gates">Gate sweep</button>
+      <button data-tab="levs">Leverage sweep</button>
+    </div>
+    <div class="tblwrap" id="tab-trades"></div>
+    <div class="tblwrap hidden" id="tab-monthly"></div>
+    <div class="tblwrap hidden" id="tab-gates"></div>
+    <div class="tblwrap hidden" id="tab-levs"></div>
+  </div>
+</div>
+</div>
+</div>
+<script>
+/* ================= engine ported from the Apps Script backtester ================= */
+'use strict';
+const API='https://api.coinalyze.net/v1';
+const INTERVAL_MS={'1min':6e4,'5min':3e5,'15min':9e5,'30min':18e5,'1hour':36e5,'2hour':72e5,'4hour':144e5,'6hour':216e5,'12hour':432e5,'daily':864e5};
+let RAW={};          // symbol -> [{t,open,high,low,close,volume,volumeUSD}]
+let LAST=null;       // last single-run result
+let MARKETS=null;
+
+const $=id=>document.getElementById(id);
+const log=(m,cls)=>{const d=$('log');d.innerHTML+='\n'+(cls?`<span class="${cls}">${m}</span>`:m);d.scrollTop=d.scrollHeight;};
+const fmt$=v=>(v<0?'-$':'$')+Math.abs(v).toFixed(2);
+const fmtP=v=>(v*100).toFixed(2)+'%';
+
+function cfg(){
+  return {
+    apiKey:$('apiKey').value.trim(), exchange:$('exchange').value.trim(),
+    interval:$('interval').value, historyDays:+$('historyDays').value,
+    symbols:$('symbols').value.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean),
+    volZGate:+$('volZGate').value, volLookbackDays:+$('volLookbackDays').value,
+    sustainedBars:+$('sustainedBars').value, momLookback:+$('momLookback').value,
+    runupLookback:+$('runupLookback').value, runupThreshold:+$('runupThreshold').value/100,
+    climaxLookback:+$('climaxLookback').value, bounceLookback:+$('bounceLookback').value,
+    reverseSignals:$('reverseSignals').checked,
+    holdingBars:+$('holdingBars').value, stopLossPct:+$('stopLossPct').value/100,
+    leverage:+$('leverage').value, startCapital:+$('startCapital').value,
+    monthlyContribution:+$('monthlyContribution').value,
+    positionFraction:+$('positionFraction').value, maxConcurrent:+$('maxConcurrent').value,
+    minVolumeUSD:+$('minVolumeUSD').value,
+    slippageBps:+$('slippageBps').value, takerFeeBps:+$('takerFeeBps').value, fundingBps8h:+$('fundingBps8h').value,
+    gateSweepList:$('gateSweepList').value.split(',').map(Number).filter(x=>!isNaN(x)),
+    leverageSweepList:$('leverageSweepList').value.split(',').map(Number).filter(x=>!isNaN(x))
+  };
+}
+const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+const stdev=a=>{const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)*(x-m))))};
+const barsPerDay=iv=>Math.round(864e5/INTERVAL_MS[iv]);
+
+/* ---------------- data: fetch or paste ---------------- */
+async function getMarkets(key){
+  if(MARKETS)return MARKETS;
+  const r=await fetch(API+'/future-markets?api_key='+encodeURIComponent(key));
+  if(!r.ok)throw new Error('future-markets HTTP '+r.status);
+  MARKETS=await r.json(); return MARKETS;
+}
+function resolveMarket(markets,symbol,exch){
+  const base=symbol.replace(/USDT$/,''),quote='USDT';
+  if(base===symbol)throw new Error(symbol+' is not USDT-quoted');
+  const m=markets.filter(x=>x.is_perpetual&&x.base_asset===base&&x.quote_asset===quote);
+  if(!m.length)throw new Error('no perp for '+symbol);
+  let pick=m[0];
+  if(exch){const p=m.find(x=>String(x.exchange).toLowerCase().includes(exch.toLowerCase()));if(p)pick=p;}
+  return {symbol:pick.symbol,denom:pick.oi_lq_vol_denominated_in||'QUOTE_ASSET'};
+}
+async function checkUniverse(){
+  const c=cfg(); if(!c.apiKey){log('API key required for live calls.','err');return;}
+  try{
+    const mk=await getMarkets(c.apiKey); const miss=[];
+    c.symbols.forEach(s=>{try{const r=resolveMarket(mk,s,c.exchange);log(s+' → '+r.symbol);}catch(e){miss.push(s);}});
+    log(miss.length?('MISSING: '+miss.join(', ')):'All symbols resolved.','ok');
+  }catch(e){log('Universe check failed: '+e.message+' — if this is a CORS/network error, use Paste mode.','err');}
+}
+async function fetchData(){
+  const c=cfg();
+  if($('pasteMode').checked){parsePaste();return;}
+  if(!c.apiKey){log('API key required. Or tick Paste mode.','err');return;}
+  $('btnFetch').disabled=true; RAW={};
+  const to=Math.floor(Date.now()/1e3), from=to-c.historyDays*86400;
+  try{
+    const mk=await getMarkets(c.apiKey);
+    for(const sym of c.symbols){
+      try{
+        const m=resolveMarket(mk,sym,c.exchange);
+        const u=API+'/ohlcv-history?symbols='+encodeURIComponent(m.symbol)+'&interval='+c.interval+'&from='+from+'&to='+to+'&api_key='+encodeURIComponent(c.apiKey);
+        const r=await fetch(u); const j=await r.json();
+        if(!r.ok)throw new Error(j.message||('HTTP '+r.status));
+        const h=(Array.isArray(j)&&j[0]&&j[0].history)||[];
+        RAW[sym]=h.map(x=>({t:x.t*1000,open:+x.o,high:+x.h,low:+x.l,close:+x.c,volume:+x.v,
+          volumeUSD:m.denom==='BASE_ASSET'?+x.v*+x.c:+x.v}));
+        log(sym+': '+RAW[sym].length+' bars');
+        await new Promise(r=>setTimeout(r,1600)); // 40 calls/min
+      }catch(e){log(sym+' failed: '+e.message,'err');}
+    }
+    log('Fetch done: '+Object.keys(RAW).length+' symbols.','ok');
+  }catch(e){
+    log('Fetch failed: '+e.message,'err');
+    log('If the console shows a CORS error, Coinalyze does not allow browser calls — export RawData from the Sheet and use Paste mode.','err');
+  }
+  $('btnFetch').disabled=false;
+}
+function parsePaste(){
+  RAW={}; let n=0;
+  $('pasteBox').value.split(/\r?\n/).forEach(line=>{
+    const p=line.split('\t'); if(p.length<7)return;
+    const t=Date.parse(p[1]); if(isNaN(t)||isNaN(+p[2]))return;
+    (RAW[p[0]]=RAW[p[0]]||[]).push({t,open:+p[2],high:+p[3],low:+p[4],close:+p[5],volume:+p[6],volumeUSD:p[7]!==undefined&&p[7]!==''?+p[7]:+p[6]});
+    n++;
+  });
+  Object.values(RAW).forEach(a=>a.sort((x,y)=>x.t-y.t));
+  log('Parsed '+n+' bars across '+Object.keys(RAW).length+' symbols from paste.','ok');
+}
+
+/* ---------------- signals + sim (same rules as the Apps Script) ---------------- */
+function buildEvents(c,gate){
+  const bpd=barsPerDay(c.interval);
+  const volLB=Math.max(2,Math.round(c.volLookbackDays*bpd));
+  const events=[];
+  for(const sym of Object.keys(RAW)){
+    const bars=RAW[sym]; const n=bars.length;
+    const volZ=new Array(n).fill(null);
+    let climaxIdx=-1,bounceHigh=-Infinity,climaxUsed=true;
+    for(let i=0;i<n;i++){
+      if(i>=volLB){
+        const w=bars.slice(i-volLB,i).map(b=>b.volume);
+        const m=mean(w),sd=stdev(w); volZ[i]=sd>0?(bars[i].volume-m)/sd:0;
+      }
+      const liquid=bars[i].volumeUSD>=c.minVolumeUSD;
+      // long
+      if(i>=Math.max(c.momLookback,c.runupLookback,volLB)+c.sustainedBars){
+        let sus=true;
+        for(let k=0;k<c.sustainedBars;k++){if(volZ[i-k]===null||volZ[i-k]<gate){sus=false;break;}}
+        const mom=(bars[i].close-bars[i-c.momLookback].close)/bars[i-c.momLookback].close;
+        const run=(bars[i].close-bars[i-c.runupLookback].close)/bars[i-c.runupLookback].close;
+        if(sus&&mom>0&&run>0&&liquid)events.push({t:bars[i].t,sym,dir:'long',bars,idx:i});
+      }
+      // short: failed relief bounce after volume climax
+      if(i>=Math.max(c.climaxLookback,c.runupLookback,volLB)){
+        const run=(bars[i].close-bars[i-c.runupLookback].close)/bars[i-c.runupLookback].close;
+        const cw=bars.slice(i-c.climaxLookback,i+1).map(b=>b.volume);
+        const isMax=bars[i].volume===Math.max(...cw);
+        if(isMax&&run>=c.runupThreshold&&climaxUsed){climaxIdx=i;bounceHigh=bars[i].close;climaxUsed=false;}
+        else if(climaxIdx>=0&&i>climaxIdx&&i-climaxIdx<=c.bounceLookback){
+          bounceHigh=Math.max(bounceHigh,bars[i].close);
+          const down=bars[i].close<bars[i].open, failed=bars[i].close<bounceHigh;
+          const volOk=volZ[i]!==null&&volZ[i]>=gate;
+          if(down&&failed&&volOk&&liquid){events.push({t:bars[i].t,sym,dir:'short',bars,idx:i});climaxUsed=true;}
+        } else if(climaxIdx>=0&&i-climaxIdx>c.bounceLookback){climaxUsed=true;}
+      }
+    }
+  }
+  if(c.reverseSignals)events.forEach(e=>e.dir=e.dir==='long'?'short':'long');
+  events.sort((a,b)=>a.t-b.t);
+  return events;
+}
+function runSim(c,gate,lev){
+  const events=buildEvents(c,gate);
+  let equity=c.startCapital,contributed=c.startCapital,fees=0;
+  let open=[]; const trades=[]; const eqCurve=[];
+  const start=events.length?events[0].t:Date.now();
+  let nextContrib=start+30*864e5;
+  for(const ev of events){
+    while(ev.t>=nextContrib){equity+=c.monthlyContribution;contributed+=c.monthlyContribution;nextContrib+=30*864e5;}
+    open=open.filter(p=>p.exitTime>ev.t);
+    if(open.length>=c.maxConcurrent)continue;
+    if(open.some(p=>p.sym===ev.sym))continue;
+    const bars=ev.bars, ei=ev.idx+1;
+    if(ei>=bars.length)continue;
+    const slip=c.slippageBps/1e4;
+    const entry=ev.dir==='long'?bars[ei].open*(1+slip):bars[ei].open*(1-slip);
+    const stopP=ev.dir==='long'?entry*(1-c.stopLossPct):entry*(1+c.stopLossPct);
+    const margin=equity*c.positionFraction, notional=margin*lev, qty=notional/entry;
+    const feeIn=notional*c.takerFeeBps/1e4;
+    let xi=Math.min(ei+c.holdingBars,bars.length-1),reason='time',xp=null;
+    for(let j=ei;j<=Math.min(ei+c.holdingBars,bars.length-1);j++){
+      if(ev.dir==='long'&&bars[j].low<=stopP){xi=j;reason='stop';xp=stopP;break;}
+      if(ev.dir==='short'&&bars[j].high>=stopP){xi=j;reason='stop';xp=stopP;break;}
+    }
+    if(xp===null)xp=bars[xi].close;
+    xp=ev.dir==='long'?xp*(1-slip):xp*(1+slip);
+    const feeOut=notional*c.takerFeeBps/1e4;
+    const hrs=((bars[xi].t-bars[ei].t)/36e5)||(INTERVAL_MS[c.interval]/36e5);
+    const funding=notional*c.fundingBps8h/1e4*(hrs/8);
+    const gross=ev.dir==='long'?qty*(xp-entry):qty*(entry-xp);
+    const f=feeIn+feeOut+funding, net=gross-f;
+    equity+=net; fees+=f;
+    open.push({sym:ev.sym,exitTime:bars[xi].t});
+    trades.push({sym:ev.sym,dir:ev.dir,entryTime:bars[ei].t,exitTime:bars[xi].t,entry,exit:xp,
+      grossRet:gross/margin,ret:net/margin,pnl:net,fee:f,reason});
+    eqCurve.push({t:bars[xi].t,eq:equity});
+  }
+  return {trades,finalEquity:equity,contributed,fees,eqCurve,
+    start,end:events.length?events[events.length-1].t:start};
+}
+
+/* ---------------- rendering ---------------- */
+function card(k,v,cls,note){return `<div class="card"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div>${note?`<div class="n">${note}</div>`:''}</div>`;}
+function renderRun(c,res){
+  LAST=res; $('btnCsv').disabled=!res.trades.length;
+  const t=res.trades, days=Math.max(1,(res.end-res.start)/864e5);
+  const pnl=res.finalEquity-res.contributed;
+  const wins=t.filter(x=>x.pnl>0), gw=wins.reduce((a,x)=>a+x.pnl,0), gl=t.filter(x=>x.pnl<0).reduce((a,x)=>a+x.pnl,0);
+  const best=t.length?Math.max(...t.map(x=>x.pnl)):0;
+  const exBest=pnl-best;
+  $('cards').innerHTML=
+    card('Trading P&L',fmt$(pnl),pnl>=0?'pos':'neg',days.toFixed(0)+' days · '+t.length+' trades')+
+    card('P&L / day',fmt$(pnl/days),pnl>=0?'pos':'neg','the "few bucks a day" number')+
+    card('Ex-best-trade P&L',fmt$(exBest),exBest>=0?'pos':'neg','remove single best trade')+
+    card('Hit rate',t.length?((wins.length/t.length*100).toFixed(0)+'%'):'—','', 'avg net '+(t.length?fmtP(mean(t.map(x=>x.ret))):'—')+'/trade')+
+    card('Profit factor',gl<0?(gw/-gl).toFixed(2):'∞','', 'wins '+fmt$(gw)+' / losses '+fmt$(gl))+
+    card('Final equity',fmt$(res.finalEquity),'','contributed '+fmt$(res.contributed))+
+    card('Fees + funding',fmt$(res.fees),'neg',t.length?fmt$(res.fees/t.length)+'/trade':'');
+  // honesty strip: fee floor vs avg gross edge, both as % of margin
+  const rt=(2*c.takerFeeBps+2*c.slippageBps)/1e4*c.leverage;
+  const avgGross=t.length?mean(t.map(x=>Math.abs(x.grossRet))):0;
+  const netEdge=t.length?mean(t.map(x=>x.grossRet)):0;
+  const mx=Math.max(rt,avgGross,1e-9);
+  $('gFee').style.width=(rt/mx*100)+'%';
+  $('gEdge').style.width=(Math.max(0,netEdge)/mx*100)+'%';
+  $('honesty').classList.remove('hidden');
+  $('honestyCap').innerHTML=`Round-trip cost floor ≈ <b>${fmtP(rt)}</b> of margin (fees+slip × ${c.leverage}× lev, before funding). `+
+    `Average gross move captured: <b>${fmtP(netEdge)}</b> signed / ${fmtP(avgGross)} absolute. `+
+    (netEdge<=rt?`<span class="neg">Gross edge does not clear the cost floor at this interval — shorter bars make this worse, not better.</span>`
+                :`<span class="pos">Gross edge clears the cost floor by ${fmtP(netEdge-rt)}.</span>`);
+  $('tape').innerHTML=`gate <b>${c.volZGate}</b> · ${c.interval} · lev <b>${c.leverage}×</b> · trades <b>${t.length}</b> · P&L/day <b>${fmt$(pnl/days)}</b>`;
+  // trades table
+  const rows=t.map(x=>`<tr><td>${x.sym}</td><td class="${x.dir==='long'?'pos':'neg'}">${x.dir}</td>
+    <td>${new Date(x.entryTime).toLocaleString()}</td><td>${new Date(x.exitTime).toLocaleString()}</td>
+    <td>${x.entry.toPrecision(6)}</td><td>${x.exit.toPrecision(6)}</td>
+    <td class="${x.ret>=0?'pos':'neg'}">${fmtP(x.ret)}</td><td class="${x.pnl>=0?'pos':'neg'}">${fmt$(x.pnl)}</td><td>${x.reason}</td></tr>`).join('');
+  $('tab-trades').innerHTML=`<table><thead><tr><th>Symbol</th><th>Dir</th><th>Entry</th><th>Exit</th><th>Entry px</th><th>Exit px</th><th>Ret%</th><th>Net P&L</th><th>Exit</th></tr></thead><tbody>${rows||'<tr><td colspan=9>no trades</td></tr>'}</tbody></table>`;
+  // daily+monthly pnl
+  const byDay={},byMo={};
+  t.forEach(x=>{const d=new Date(x.exitTime);const dk=d.toISOString().slice(0,10),mk=dk.slice(0,7);
+    byDay[dk]=(byDay[dk]||0)+x.pnl; byMo[mk]=(byMo[mk]||0)+x.pnl;});
+  const mrows=Object.keys(byMo).sort().map(k=>`<tr><td>${k}</td><td class="${byMo[k]>=0?'pos':'neg'}">${fmt$(byMo[k])}</td></tr>`).join('');
+  const drows=Object.keys(byDay).sort().map(k=>`<tr><td>${k}</td><td class="${byDay[k]>=0?'pos':'neg'}">${fmt$(byDay[k])}</td></tr>`).join('');
+  $('tab-monthly').innerHTML=`<table><thead><tr><th>Month</th><th>P&L</th></tr></thead><tbody>${mrows}</tbody></table>
+    <table style="margin-top:6px"><thead><tr><th>Day</th><th>P&L</th></tr></thead><tbody>${drows}</tbody></table>`;
+  drawEquity(res); $('resultTabs').classList.remove('hidden');
+  $('eqTitle').classList.remove('hidden'); $('eqCanvas').classList.remove('hidden');
+}
+function drawEquity(res){
+  const cv=$('eqCanvas'); cv.width=cv.clientWidth*2; cv.height=360;
+  const ctx=cv.getContext('2d'); ctx.clearRect(0,0,cv.width,cv.height);
+  const pts=res.eqCurve; if(pts.length<2)return;
+  const xs=pts.map(p=>p.t),ys=pts.map(p=>p.eq);
+  const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys)*0.98,y1=Math.max(...ys)*1.02;
+  const X=t=>20+(t-x0)/(x1-x0)*(cv.width-40), Y=v=>cv.height-20-(v-y0)/(y1-y0)*(cv.height-40);
+  ctx.strokeStyle='#262e3a'; ctx.lineWidth=1;
+  [0.25,0.5,0.75].forEach(f=>{const y=20+f*(cv.height-40);ctx.beginPath();ctx.moveTo(20,y);ctx.lineTo(cv.width-20,y);ctx.stroke();});
+  ctx.strokeStyle='#f2a33c'; ctx.lineWidth=2.5; ctx.beginPath();
+  pts.forEach((p,i)=>{i?ctx.lineTo(X(p.t),Y(p.eq)):ctx.moveTo(X(p.t),Y(p.eq));}); ctx.stroke();
+  ctx.fillStyle='#8a93a3'; ctx.font='20px IBM Plex Mono,monospace';
+  ctx.fillText('$'+y1.toFixed(0),24,34); ctx.fillText('$'+y0.toFixed(0),24,cv.height-26);
+}
+function needData(){if(!Object.keys(RAW).length){log('No data loaded — Fetch data or use Paste mode first.','err');return true;}return false;}
+function runBacktest(){ if(needData())return; const c=cfg();
+  try{renderRun(c,runSim(c,c.volZGate,c.leverage)); log('Backtest done.','ok');}catch(e){log('Run failed: '+e.message,'err');}}
+function gateSweep(){ if(needData())return; const c=cfg();
+  const rows=c.gateSweepList.map(g=>{const r=runSim(c,g,c.leverage);
+    const t=r.trades,days=Math.max(1,(r.end-r.start)/864e5);
+    const L=t.filter(x=>x.dir==='long'),S=t.filter(x=>x.dir==='short');
+    const hit=a=>a.length?(a.filter(x=>x.pnl>0).length/a.length*100).toFixed(0)+'%':'—';
+    const avg=a=>a.length?fmtP(mean(a.map(x=>x.ret))):'—';
+    const pnl=r.finalEquity-r.contributed;
+    return `<tr><td>${g}</td><td>${(L.length/days).toFixed(1)}</td><td>${hit(L)}</td><td>${avg(L)}</td>
+      <td>${(S.length/days).toFixed(1)}</td><td>${hit(S)}</td><td>${avg(S)}</td>
+      <td class="${pnl>=0?'pos':'neg'}">${fmt$(pnl)}</td><td class="${(pnl-(t.length?Math.max(...t.map(x=>x.pnl)):0))>=0?'pos':'neg'}">${fmt$(pnl-(t.length?Math.max(...t.map(x=>x.pnl)):0))}</td></tr>`;}).join('');
+  $('tab-gates').innerHTML=`<table><thead><tr><th>Gate</th><th>Longs/day</th><th>L hit</th><th>L avg</th><th>Shorts/day</th><th>S hit</th><th>S avg</th><th>P&L</th><th>P&L ex-best</th></tr></thead><tbody>${rows}</tbody></table>`;
+  showTab('gates'); $('resultTabs').classList.remove('hidden'); log('Gate sweep done.','ok');}
+function levSweep(){ if(needData())return; const c=cfg();
+  const rows=c.leverageSweepList.map(l=>{const r=runSim(c,c.volZGate,l);const pnl=r.finalEquity-r.contributed;
+    return `<tr><td>${l}×</td><td>${r.trades.length}</td><td class="${pnl>=0?'pos':'neg'}">${fmt$(pnl)}</td><td>${fmt$(r.finalEquity)}</td><td>${fmt$(r.contributed)}</td><td>${fmt$(r.fees)}</td></tr>`;}).join('');
+  $('tab-levs').innerHTML=`<table><thead><tr><th>Leverage</th><th>Trades</th><th>Trading P&L</th><th>Final equity</th><th>Contributed</th><th>Fees</th></tr></thead><tbody>${rows}</tbody></table>`;
+  showTab('levs'); $('resultTabs').classList.remove('hidden'); log('Leverage sweep done.','ok');}
+function exportCsv(){ if(!LAST)return;
+  const head='Symbol,Direction,EntryTime,ExitTime,EntryPrice,ExitPrice,ReturnPct,NetPnL,ExitReason\n';
+  const body=LAST.trades.map(x=>[x.sym,x.dir,new Date(x.entryTime).toISOString(),new Date(x.exitTime).toISOString(),x.entry,x.exit,x.ret,x.pnl,x.reason].join(',')).join('\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([head+body],{type:'text/csv'})); a.download='trades.csv'; a.click();}
+function showTab(name){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));
+  ['trades','monthly','gates','levs'].forEach(t=>$('tab-'+t).classList.toggle('hidden',t!==name));}
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>showTab(b.dataset.tab)));
+$('pasteMode').addEventListener('change',e=>$('pasteBox').classList.toggle('hidden',!e.target.checked));
+$('btnUniverse').addEventListener('click',checkUniverse);
+$('btnFetch').addEventListener('click',fetchData);
+$('btnRun').addEventListener('click',runBacktest);
+$('btnGate').addEventListener('click',gateSweep);
+$('btnLev').addEventListener('click',levSweep);
+$('btnCsv').addEventListener('click',exportCsv);
+</script>
+</body>
+</html>
